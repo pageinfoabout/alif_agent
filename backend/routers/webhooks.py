@@ -17,14 +17,8 @@ webhook_receiver = lk_webhook.WebhookReceiver(token_verifier)
 
 @router.post("/caller")
 async def livekit_webhook(request: Request):
-    event = await webhook_receiver.receive(request)
- 
+    body = await request.body()
+    auth_header = request.headers.get("Authorization")
 
-    print({"body": event.event, "auth_header": event})
-   
-
-
-
-    return {"new caller": event.event, "success": event.event}
-
-
+    event = webhook_receiver.receive_webhook(body, auth_header)
+    return {"body": body, "event": event}

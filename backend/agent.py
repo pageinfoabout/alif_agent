@@ -240,34 +240,28 @@ async def my_agent(ctx: JobContext):
    
 
     await session.start(
-        room=room,
-        agent=Assistant(),
-        room_options=room_io.RoomOptions(
-            audio_input=room_io.AudioInputOptions(
-                noise_cancellation=None# OSS-safe
-            ),
-           
+    room=room,
+    agent=Assistant(),
+    room_options=room_io.RoomOptions(
+        audio_input=room_io.AudioInputOptions(
+            noise_cancellation=None  # OSS-safe
         ),
-    )
+        # ✅ ЭТО ВСЁ! Комната удалится автоматически
+        delete_room_on_close=True  # ← КОМНАТА УДАЛИТСЯ ПРИ ДИСКОННЕКТЕ!
+    ),
+)
+
     participant = await ctx.wait_for_participant()
-    participant.attributes['sip.phoneNumber']
-    print(f"🔔 Participant joined: { participant.attributes} ({participant.kind})")
+    print(f"🔔 Participant joined: {participant.attributes}")
 
     if not participant:
         print("No participant joined.")
-        await lkapi.room.delete_room(DeleteRoomRequest(
-        room="myroom",
-        ))
     else:
-
         await session.say(
             "Клиника «Алиф Дэнт». Здравствуйте, как я могу вам помочь?",
-                allow_interruptions=False,
-            )
-        
+            allow_interruptions=False,
+        )
 
-            # Внутри твоего agent.py → AgentSession
-    
 
 
 if __name__ == "__main__":
