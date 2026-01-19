@@ -15,7 +15,7 @@ LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET")
 token_verifier = lk_webhook.TokenVerifier(api_key=LIVEKIT_API_KEY, api_secret=LIVEKIT_API_SECRET)
 webhook_receiver = lk_webhook.WebhookReceiver(token_verifier)
 
-@router.post("/caller")
+@router.post("/webhooks/caller")
 async def livekit_webhook(request: Request):
     event = await webhook_receiver.receive(request)
     room_name = event.room.name if event.room else None
