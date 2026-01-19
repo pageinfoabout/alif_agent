@@ -1,27 +1,28 @@
-from livekit.api import webhook as lk_webhook  # ✅ ПРАВИЛЬНЫЙ ИМПОРТ
-from livekit import api
+# routers/webhooks.py
+from fastapi import APIRouter, Request
+from livekit.api import webhook as lk_webhook
 import os
-from dotenv import load_dotenv
-from fastapi import FastAPI, Request, APIRouter
-
-load_dotenv()
-app = FastAPI()
 
 router = APIRouter(tags=["webhooks"])
-# Глобально (после load_dotenv)
+
+# Загружаем .env ГЛОБАЛЬНО (или передай через main.py)
 LIVEKIT_API_KEY = os.getenv("LIVEKIT_API_KEY")
 LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET")
 
 token_verifier = lk_webhook.TokenVerifier(api_key=LIVEKIT_API_KEY, api_secret=LIVEKIT_API_SECRET)
 webhook_receiver = lk_webhook.WebhookReceiver(token_verifier)
 
-@router.post("webhooks/caller")
+@router.post("/webhooks/caller")  # ← ТОЧНО такой путь!
 async def livekit_webhook(request: Request):
-    body = await request.body()
-    auth_header = request.headers.get("Authorization")
+    print("🔥 WEBHOOK HIT!")
+    try:
+        event = await webhook_receiver.receive(request)
+        room_name = event.room.name if event.room else None
+        print(f"📡 EVENT: {event.event} | Room: {room_name}")
+        return {"status": "ok", "event": event.event, "room": room_name}
+    except Exception as e:
+        print(f"❌ ERROR: {e}")
+        return {"error": str(e)}
 
-    print({"body": body, "auth_header": auth_header})
-
-    return {"status": "success"}
 
 
