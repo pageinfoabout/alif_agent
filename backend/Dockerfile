@@ -22,4 +22,4 @@ ENV PYTHONPATH=/backend
 ENV PATH="/root/.local/bin:$PATH"
 
 
-CMD  ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "3000"]
+CMD  ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
