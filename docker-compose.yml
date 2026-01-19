@@ -1,0 +1,34 @@
+services:
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: server
+    command: ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "3000"]
+    ports:
+      - "3000:3000"
+
+  agent:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.agent # отдельный Dockerfile для агента
+    container_name: livekit-agent
+    env_file:
+      - backend/.env
+    ports:
+      - "4000:4000"  # LiveKit Agent порт
+    restart: unless-stopped
+    depends_on:
+      - api
+    deploy:
+      resources:
+        limits:
+          memory: 4G      # ← 4GB для Silero + LiveKit!
+          cpus: '2.0'     # 2 CPU
+        reservations:
+          memory: 2G
+    environment:
+      - LIVEKIT_AGENT_MAX_MEMORY_MB=4096  # убираеdcoт warning
+      - TORCH_BACKEND=none                # убирает NNPACK spam
+    volumes:
+      - ./backend/logs:/agent/logs
