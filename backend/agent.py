@@ -23,8 +23,6 @@ from livekit.agents import (
     JobContext,
     JobProcess,
     cli,
-    llm,
-    inference,
     room_io,
     
 )
@@ -62,9 +60,7 @@ class Assistant(Agent):
 Тебя зовут Анита. общайся от лица женщины.
 Cегодня {datetime.now(pytz.timezone('Europe/Moscow')).strftime("%d %B %Y")}
 
-
-
-пример правильного айди - "id": "service_id" (например: serv-orthodontic-maintenance),
+Пример правильного айди - "id": "service_id" (например: serv-orthodontic-maintenance),
 
 # Форматирование ответов
 ВАЖНО: При формировании ответов соблюдайте следующие правила:
@@ -155,7 +151,6 @@ get_services
 - если пользователь не зарегистрирован, ты:
 вызращаешь null
 
-
 # Завершение записи
 
 После успешной записи:
@@ -163,12 +158,8 @@ get_services
 - дату и время приёма
 - поблагодари за обращение
 
-
-
 Пример:
 "Вы записаны на приём в клинику «Алиф Дент» на 12 января в 15:00. Спасибо за обращение, будем рады вас видеть!"
-
-
 
 """
 ,
@@ -228,12 +219,12 @@ async def my_agent(ctx: JobContext):
             api_key=DEEPGRAM_API_KEY,
         ),
         llm=openai.LLM.with_deepseek(
-            model="deepseek-chat",
+            model="deepseek-reasoner",
             base_url="https://api.deepseek.com/v1",
             api_key=DEEPSEEK_API_KEY,
             
             temperature=0.2,
-            top_p=0.4,
+            top_p=0.3,
             
         ),
         tts=LocalSileroTTS(

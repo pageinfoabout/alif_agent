@@ -35,7 +35,7 @@ async def main():
         dispatch_rule = api.SIPDispatchRuleInfo(
             rule = rule,
             name = 'My dispatch rule',
-            trunk_ids = ["ST_xWa2NPEYShEZ"],
+            trunk_ids = ["ST_cConhzScJvU2"],
             room_config=api.RoomConfiguration(
                 agents=[api.RoomAgentDispatch(
                     agent_name="assistant",
@@ -52,23 +52,7 @@ async def main():
 
         await lkapi.aclose()
             
-    if not trunks.items:
-        trunk = api.SIPInboundTrunkInfo(
-        name = "My trunk",
-        numbers = ["+74992130459"],
-        allowed_numbers = {}
-        krisp_enabled = True,
-        )
-        request = api.CreateSIPInboundTrunkRequest(
-        trunk = trunk
-        )
-        trunk = await lkapi.sip.create_sip_inbound_trunk(request)
-        print(f"Created trunk: {trunk.sip_trunk_id}")
-        await lkapi.aclose()
-    else:
-        print("trunks and dispatch rule already exists")
-        await lkapi.aclose()
-
+   
 
   
 
