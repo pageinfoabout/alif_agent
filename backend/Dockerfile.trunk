@@ -8,12 +8,10 @@ WORKDIR /backend
 RUN apt-get update && apt-get install -y build-essential libglib2.0-0 libgirepository1.0-dev pkg-config && rm -rf /var/lib/apt/lists/*
 
 # Установить зависимости одной строкой!
-RUN pip install --no-cache-dir \\
-    livekit \\
-    aiohttp \\
-    python-dotenv \\
+RUN pip install --no-cache-dir livekit aiohttp python-dotenv 
 
 COPY . .
 
 ENV PYTHONPATH=/backend
 ENV PATH="/root/.local/bin:$PATH"
+
