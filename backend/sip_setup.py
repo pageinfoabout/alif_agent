@@ -54,6 +54,7 @@ async def livekit_webhook(request: Request):
         elif event.event == "room_finished":
             print(f"📞 CALL ENDED: {event.room.name}")
             
+               
     except Exception as e:
         print(f"❌ Webhook error: {e}")
         raise HTTPException(status_code=400, detail=str(e))
@@ -92,4 +93,3 @@ async def setup_sip():
     
     await lkapi.aclose()
     return {"status": "sip_configured"}
-

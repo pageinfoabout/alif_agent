@@ -22,3 +22,5 @@ torch
 torchaudio
 numpy
 scipy
+
+asyncio 

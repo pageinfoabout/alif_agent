@@ -6,11 +6,15 @@ from livekit.agents.beta.workflows.dtmf_inputs import GetDtmfTask
 import logging
 import pytz
 import datetime
+import aiohttp
 import json
 from dataclasses import dataclass, field
 from typing import Optional
-
+from typing import List
 from dotenv import load_dotenv
+from livekit.protocol import sip as proto_sip
+import phonenumbers
+from phonenumbers import parse, PhoneNumberFormat  # For normalize_phone()
 
 from livekit.agents import (
     Agent,
@@ -18,16 +22,14 @@ from livekit.agents import (
     AgentServer,
     AgentSession,
     JobContext,
-    ChatContext,
     RunContext,
     cli,
     room_io,
 )
 from livekit.plugins import deepgram, openai, silero
-from livekit.protocol import sip as proto_sip
 
 from datetime import datetime
-from tools import  get_date, create_booking, get_services, delete_booking, get_time
+from tools import  get_date, get_services, get_time
 from tts_silero import LocalSileroTTS 
 import os
 
@@ -44,6 +46,14 @@ LIVEKIT_URL = os.getenv("LIVEKIT_URL")
 
 server = AgentServer()
 
+def format_ru(phone: str) -> str: 
+    num = phonenumbers.parse(phone, "RU")
+    intl = phonenumbers.format_number(num, PhoneNumberFormat.INTERNATIONAL)
+    intl = intl.replace(" ", "")       
+    intl = intl.replace("+7", "+7(")    
+    return intl[:6] + ")" + intl[6:]
+
+
 @dataclass
 class UserData:
     
@@ -52,10 +62,8 @@ class UserData:
     ctx: Optional[JobContext] = None
 
     phone: str | None = None
-
-    service_id: str | None = None
-    service_name: str | None = None
-    service_price: int | None = None
+    room: str | None = None
+    participant_identity: str | None = None 
 
     def summarize(self) -> str:
         return "Пациент и информация о сессии."
@@ -67,19 +75,22 @@ print(RunContext_T)
 class Main_Agent(Agent):
     @function_tool
     async def end_call(self, ctx: RunContext[UserData]) -> None:
+        
         """
         Вызывается если пациент сказал до свидания или хочет завершить звонок.
         
         """
+        
         lkapi = api.LiveKitAPI(
                 url=LIVEKIT_URL,
                 api_key=LIVEKIT_API_KEY,
                 api_secret=LIVEKIT_API_SECRET,
             )
         await self.session.generate_reply(user_input="До свидания!")
-
         await lkapi.room.delete_room(DeleteRoomRequest(
+            
         room=ctx.userdata.room,
+        
         ))
         print(f"🔔Звонок в комнате {ctx.userdata.room} завершен.")
      
@@ -111,44 +122,192 @@ class Main_Agent(Agent):
             transfer_to=transfer_to,  # ← строка "79150628917"
             play_dialtone=True
         )
+            await self.session.generate_reply(user_input="Перевожу на менеджера")
             await userdata.livekit_api.sip.transfer_sip_participant(transfer_request) 
             
         except Exception as e:
             logger.error(f"Failed to transfer call: {e}", exc_info=True)
             await self.session.generate_reply(user_input="Извините, cкорее всего все менеджеры заняты. Чем ещё могу помочь?")
+
     @function_tool
-    async def transfer_to_booking(self, ctx: RunContext[UserData], service_id : str, service_title : str, service_price : int, doc_id: str, date: str, time: str) -> str:
-        """
-        Вызывается, когда услуга определена. Передает пациента агенту записи.
-        Args:
-        service_data: JSON с данными услуги {"id": "1", "name": "Лечение кариеса", "price": 5000}
+    async def delete_booking(self, date: str, ctx: RunContext[UserData]) -> str:
+        """Удаляет запись по дате. Возвращает результат операции."""
+        headers = {
+            "Accept": "application/json",
+            "Authorization": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6MjU1MjksImFwaUtleSI6InRuTUU1OHVNbXVZQjBUS01FN3JDIiwib3JnSWQiOjEwNDg0LCJuYW1lIjoi0KPQvNCw0YDQsdC10LrQvtCyINCa0LDQvdCw0YLQsdC10Log0KPQvNCw0YDQsdC10LrQvtCy0LjRhyIsInBob25lIjoiKzcoOTk5KTg1MS02Ni05MiIsImVtYWlsIjoiYWxpZmRlbnRtb3Njb3dAZ21haWwuY29tIiwiaWF0IjoxNzcxMjQ1MzA3fQ.ftZ3FNzSEiOuS6Ex9I_kcpCsGmL_Z7ElGAp5P62fMFs"
+        }
+        params = {
+            "dateFrom": date,
+            "dateTill": date,
+            "perPage": "100"
+        }
+        userdata = ctx.userdata
+        phone_raw = userdata.phone
+        phone = format_ru(phone_raw)
+
+        if not phone:
+            return "Ошибка: номер телефона не найден в данных пользователя."
+
+        url = "https://crmexchange.1denta.ru/api/v2/visit"
         
-        **🚨 КОГДА УСЛУГА ОПРЕДЕЛЕНА через get_services():**
+        try:
+            async with aiohttp.ClientSession() as session:
+                # 1. Получаем список записей
+                async with session.get(url, headers=headers, params=params) as response:
+                    if response.status != 200:
+                        return f"Ошибка получения записей: HTTP {response.status}"
 
-        1. Предложи пациенту услугу из списка
-        2. Получи подтверждение  
-        3. **ВЫЗОВИ transfer_to_booking** с JSON:
-        {{"id": "1", "name": "Лечение кариеса", "price": 5000}}
+                    data = await response.json()
+                    print(f"data", data)
+                    
+                    # data содержит массив объектов как в вашем примере
+                    bookings = data if isinstance(data, list) else data.get('data', [])
+                    
+                    deleted_count = 0
+                    errors = []
+                    
+                    # 2. Ищем записи для нужного телефона и удаляем
+                    for booking in bookings:
+                        client_data = booking.get('clientData', {})
+                        booking_phone = client_data.get('phone')
+                        print(f"телефон",phone)
+                        print(f"телефон",booking_phone)
+                        
+                        if booking_phone == phone and not booking.get('deleted', True):
+                            booking_id = booking['id']
+                            
+                            # 3. Удаляем запись
+                            delete_url = f"https://crmexchange.1denta.ru/api/v2/visit/{booking_id}"
+                            async with session.delete(delete_url, headers=headers) as delete_response:
+                                if delete_response.status == 200:
+                                    deleted_count += 1
+                                    logger.info(f"Запись {booking_id} удалена для {phone}")
+                                else:
+                                    error_msg = await delete_response.text()
+                                    errors.append(f"Запись {booking_id}: {delete_response.status} - {error_msg}")
+                    
+                    if deleted_count > 0:
+                        return f"✅ Успешно удалено {deleted_count} записей для {phone}."
+                    elif errors:
+                        return f"❌ Ошибки при удалении: {'; '.join(errors)}"
+                    else:
+                        return f"ℹ️ Активных записей для {phone} в указанном периоде не найдено."
+                        
+        except Exception as e:
+            logger.error(f"Ошибка в delete_booking: {e}", exc_info=True)
+            return f"❌ Произошла ошибка: {str(e)}"
 
-        text
-        ** НЕ записывай сама! Только передавай агенту записи! **
+                        
+                        
+
+    @function_tool
+    async def create_booking(
+        self, 
+        ctx: RunContext[UserData],
+        name: str,
+        service_title: str,
+        date_and_time: str,
+        resource_id: int = None
+    ) -> str:
+        
         """
-    
+            Ты вызываешь функцию создания записи только после того как пользователь подтвердил данные и сказал "да"
+            если пользователь сказал "нет", то НЕ вызывай функцию.
+
+            Перед вызовом функции ты ОБЯЗАН убедиться, что получены все обязательные данные.
+
+            ---
+
+            # Обязательные поля (без них функцию вызывать нельзя)
+
+            1. name — имя пациента
+            2. phone — sip_caller_phone
+            3. date_and_time — дата и время приёма
+            5. services_ids — номер услуги
+            6. resource_id - номер врача
+        ---
+
+            # Формат услуги (services)
+        
+            В массиве services должна быть минимум одна услуга.
+
+            ---
+
+            # Логика работы
+
+            1. Собери данные у пациента пошагово
+            2. Повтори данные перед созданием записи
+            3. Только после подтверждения пациента вызывай функцию
+            4. Передай все данные строго в соответствии со схемой
+
+            ---
+
+            # Пример подтверждения перед вызовом функции
+
+            "Подтверждаю запись:
+            Имя - Анна  
+            Дата - 15 января  
+            Время - 14:00  
+            Услуга - Лечение кариеса  
+            Купон - без купона  
+
+            Всё верно?"
+
+            ---
+
+        """
         userdata = ctx.userdata
       
         phone = userdata.phone
 
-        userdata.date = date
-        userdata.time = time
-        userdata.doc_id = doc_id
-        userdata.service_id = service_id
-        userdata.service_title = service_title
-        userdata.service_price = int(service_price)
+        print(f"телефон", phone)
         
-        print(f"🔔 Врач {doc_id} сможет принять вас {date} в {time}, вот услуга: {service_title} и цена {service_price} рублей {service_id}.  Вот номер телефона: {phone}")
+        url = "https://crmexchange.1denta.ru/api/v2/visit"
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "Authorization": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6MjU1MjksImFwaUtleSI6InRuTUU1OHVNbXVZQjBUS01FN3JDIiwib3JnSWQiOjEwNDg0LCJuYW1lIjoi0KPQvNCw0YDQsdC10LrQvtCyINCa0LDQvdCw0YLQsdC10Log0KPQvNCw0YDQsdC10LrQvtCy0LjRhyIsInBob25lIjoiKzcoOTk5KTg1MS02Ni05MiIsImVtYWlsIjoiYWxpZmRlbnRtb3Njb3dAZ21haWwuY29tIiwiaWF0IjoxNzcxMjQ1MzA3fQ.ftZ3FNzSEiOuS6Ex9I_kcpCsGmL_Z7ElGAp5P62fMFs"
+        }
+        comment = f"Запись создана с помощью ИИ-менеджера. Услуга: {service_title}"
 
-        return Booking_Agent(service_id, service_title, service_price, phone, doc_id, date, time), "Как вас Зовут?."
-    
+        payload = {
+            "visit": {
+                "user": {
+                "name": name,
+                "phone": phone 
+                },
+                "comment": comment,
+                "appointment": {
+                "serviceIds": [515],
+                "resourceId": resource_id,
+                "datetime": date_and_time
+                }
+            }
+        }
+
+
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, headers=headers, data=json.dumps(payload, ensure_ascii=False)) as response:
+                if response.status == 200:
+                    raw = await response.text()
+
+                    # 🔍 PRINT RAW RESPONSE (always)
+                    print("=== get_date API RESPONSE ===")
+                    print("Status:", response.status)
+                    print("Body:", raw)
+                    print("============================")
+
+                    data = await response.json()
+                    print("Booking created successfully:", data)
+                    return json.dumps(data, ensure_ascii=False)
+                else:
+                    error_data = await response.text()
+                    print(f"Booking failed with HTTP {response.status}:", error_data)
+                    return json.dumps(
+                        {"error": f"HTTP {response.status}", "details": error_data},
+                        ensure_ascii=False
+                    )
 
     def __init__(self) -> None:
         
@@ -219,15 +378,12 @@ Cегодня {datetime.now(pytz.timezone('Europe/Moscow')).strftime("%d %B %Y")
 
 6. Как только ты разобралась с датой, подбери свободное время
 
-
-Твоя цель — чтобы пациент почувствовал заботу, понял, что его слышат, и получил правильное направление к нужному специалисту клиники.
-
-
-
+7. Так же если пациент хочет отменить запись, то спроси на какое число он записался и удали запись
 
 ЗАПОМНИ ВАЖНО !!! 
 
-После того, как ты определишь услугу, вызови функцию transfer_to_booking с JSON-данными услуги
+Твоя цель — чтобы пациент почувствовал заботу, понял, что его слышат, и получил правильное направление к нужному специалисту клиники.
+
 """
 ,
 tools=[get_services, get_date, get_time],
@@ -256,138 +412,8 @@ vad=silero.VAD.load(),
             put_yo_homo=True,
         ),
     )
-class Booking_Agent(Agent):
-    @function_tool
-    async def end_call(self, ctx: RunContext[UserData]) -> None:
-        """
-        Вызывается если пациент сказал до свидания или хочет завершить звонок.
-        
-        """
-        lkapi = api.LiveKitAPI(
-                url=LIVEKIT_URL,
-                api_key=LIVEKIT_API_KEY,
-                api_secret=LIVEKIT_API_SECRET,
-            )
-        await self.session.generate_reply(user_input="До свидания!")
 
-        await lkapi.room.delete_room(DeleteRoomRequest(
-        room=ctx.userdata.room,
-        ))
-        print(f"🔔Звонок в комнате {ctx.userdata.room} завершен.")
-     
-    @function_tool
-    async def transfer_call(self, ctx: RunContext[UserData]) -> None:
-        """
-        Вызывается для перевода звонка на менеджера.
-        """
-        userdata = ctx.userdata
-        # парсим и сохраняем услугу в userdata
-        participant_identity = userdata.participant_identity
-        transfer_to = "sip:79150628917@sip.your-provider.com"
-        room = userdata.room
-        print(f"Transferring call for participant {participant_identity} to {transfer_to}")
-
-        try:
-           
-            livekit_url = LIVEKIT_URL
-            api_key = LIVEKIT_API_KEY
-            api_secret = LIVEKIT_API_SECRET
-            userdata.livekit_api = api.LiveKitAPI(
-                url=livekit_url,
-                api_key=api_key,
-                api_secret=api_secret
-            )
-            transfer_request = proto_sip.TransferSIPParticipantRequest(
-            participant_identity=participant_identity,
-            room_name=room,
-            transfer_to=transfer_to,  # ← строка "79150628917"
-            play_dialtone=True
-        )
-            await userdata.livekit_api.sip.transfer_sip_participant(transfer_request) 
-            
-        except Exception as e:
-            logger.error(f"Failed to transfer call: {e}", exc_info=True)
-            await self.session.generate_reply(user_input="Извините, cкорее всего все менеджеры заняты. Чем ещё могу помочь?")
-
-
-    def __init__(self, service_id: str, service_title: str, service_price: int, phone: int, doc_id: str, date: str, time: str, *, chat_ctx: Optional[ChatContext] = None) -> None:
-        super().__init__(
-            instructions=f"""
-Cегодня {datetime.now(pytz.timezone('Europe/Moscow')).strftime("%d %B %Y")}            
-Ты — Анита, специалист по записи пациентов.
-Твоя основная задача — записать пациента на прием собрав всю необходимую информацию.
-
-1. ФИО (надо уточнять)
-
-2. Вот услугу который выбрал пациент: {service_title} по цене {service_price} рублей. id услуги: {service_id}.
-
-3. Вот номер телефона пациента: {phone} (не надо уточнять)
-
-4. Вот Доктор к которому пойдет пациент {doc_id} (не надо уточнять)
-
-5. Дата записи {date} 
-
-6. Время записи {time} 
-
-Запиши пациента на прием используя все собранные данные. Для этого используй create_booking tool.
-────────────────
-ОСОБО ВАЖНО. ОБЯЗАТЕЛЬНО К ИСПОЛНЕНИЮ
-
-1. НЕ используйте цифры в ответах и знаки %№@*&^%$#@
-2. ВСЕГДА соблюдай знаки препинания и правила русского языка:
-3. При произнесении дат, чисел, сумм - всегда используй слова:
-   - "две тысячи двадцать шестой год" (вместо "2026 год")
-   - "первое января" (вместо "1 января")
-   - "второе января" (вместо "2 января")
-   - "пятнадцатое марта" (вместо "15 марта")
-────────────────
-
-Это ключевые правила. Они имеют наивысший приоритет и не могут быть нарушены.
-
-— речь должна быть максимально простой и понятной для обычного пациента
-— ответы должны быть короткими, чёткими и по делу
-— нельзя использовать длинные объяснения и сложные формулировки
-— нельзя повторяться
-— нельзя переформулировать один и тот же вопрос разными словами
-— каждое сообщение должно быть небольшим по объёму
-— один вопрос или одна мысль за одно сообщение
-
-Если эти правила нарушены, диалог считается неверным.
-
-────────────────
-
-Ты не может записывать клиентов ранее сегодняшнего дня.
-
-Когда запись будет успешно создана, сообщи пациенту дату и время его приема, и поблагодари его за обращение в клинику Алиф Дэнт.
-""",
-            tools=[create_booking, delete_booking],
-            vad=silero.VAD.load(),
-            stt=deepgram.STT(
-                model="nova-3",
-                language="ru",
-                api_key=DEEPGRAM_API_KEY,
-            ),
-            llm=openai.LLM.with_deepseek(
-                model="deepseek-chat",
-                base_url="https://api.deepseek.com/v1",
-                api_key=DEEPSEEK_API_KEY,
-                temperature=0.3,
-                top_p=0.5,
-            ),
-            tts=LocalSileroTTS(
-                language="ru",
-                model_id="v5_ru",
-                speaker="baya",
-                device="cpu",
-                sample_rate=48000,
-                put_accent=True,
-                put_yo=True,
-                put_stress_homo=False,
-                put_yo_homo=True,
-            ),   
-            chat_ctx=chat_ctx,
-        )
-        
+    
         
 @server.rtc_session(agent_name="assistant")
 async def entrypoint(ctx: JobContext):
@@ -408,6 +434,8 @@ async def entrypoint(ctx: JobContext):
     userdata = UserData(
         ctx=ctx,
         phone=sip_caller_phone, 
+        room=room.name,                        
+        participant_identity=participant.identity, 
         )
     session = AgentSession(
         userdata=userdata,
