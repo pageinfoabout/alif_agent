@@ -34,15 +34,15 @@ services:
       - TORCH_BACKEND=none                # убирает NNPACK spam
     volumes:
       - ./backend/logs:/agent/logs
-      
-trunk:
-  build:
-    context: ./backend
-    dockerfile: Dockerfile.trunk
-  container_name: provisioning  # ← Лучше provisioning вместо server
-  ports:
-    - "6000:6000"              # ✅ Уже есть!
-  env_file:
-    - backend/.env
-  command: ["python", "main.py"]  # ← КРИТИЧНО! Без этого не запустится
-  restart: unless-stopped       # ← Добавь для автозапуска
+        
+  trunk:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.trunk
+    container_name: provisioning  # ← Лучше provisioning вместо server
+    ports:
+      - "6000:6000"              # ✅ Уже есть!
+    env_file:
+      - backend/.env
+    command: ["python", "main.py"]  # ← КРИТИЧНО! Без этого не запустится
+    restart: unless-stopped       # ← Добавь для автозапуска
